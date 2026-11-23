@@ -50,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           $sdkDir = "C:\Program Files (x86)\Windows Kits\10\Include"
-          $sdk = if (Test-Path "$sdkDir\10.0.19041.0") { "10.0.19041.0" } else { (Get-ChildItem $sdkDir -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name }
+          $sdk = (Get-ChildItem $sdkDir -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
           Write-Host "Using WindowsTargetPlatformVersion=$sdk"
           msbuild dolphin/Source/dolphin-emu.sln `
             /t:DolphinWinRT `
