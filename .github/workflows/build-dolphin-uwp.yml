@@ -27,7 +27,7 @@ jobs:
           git -C dolphin apply --ignore-space-change --ignore-whitespace "${{ github.workspace }}/screen-borders.patch"
           git -C dolphin status --short
 
-      - name: Avoid MSVC newer-version warnings-as-errors in Base.props
+      - name: Patch project files for CI build (warnings, CppWinRT SDK match, disable desktop SDL2)
         shell: pwsh
         run: |
           $p = "dolphin/Source/VSProps/Base.props"
@@ -35,16 +35,26 @@ jobs:
                            -replace '<TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>', '<TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>' |
             Set-Content $p
 
+          # Disable desktop HAVE_SDL2 (Xbox UWP uses WGInput; avoids linking desktop GDI32 symbols from SDL2.lib)
+          $bdp = "dolphin/Source/VSProps/Base.Dolphin.props"
+          (Get-Content $bdp) -replace '<PreprocessorDefinitions>HAVE_SDL2;%\(PreprocessorDefinitions\)</PreprocessorDefinitions>', '' |
+            Set-Content $bdp
+
+          $sdlProps = "dolphin/Externals/SDL/exports.props"
+          $sdlXml = Get-Content $sdlProps -Raw
+          $sdlXml = $sdlXml -replace '(?s)<ProjectReference Include="\$\(ExternalsDir\)SDL\\SDL2\.vcxproj">.*?</ProjectReference>', ''
+          Set-Content $sdlProps $sdlXml
+
+          # Remove outdated NuGet CppWinRT 2.0.220110.5 (so DolphinWinRT matches DolphinLib's SDK C++/WinRT)
+          # and remove SirMangler's broken local relative path to SDL-UWP.vcxproj
+          $uwp = "dolphin/Source/DolphinWinRT/DolphinWinRT.vcxproj"
+          $uwpXml = Get-Content $uwp -Raw
+          $uwpXml = $uwpXml -replace '(?m)^.*Microsoft\.Windows\.CppWinRT\.2\.0\.220110\.5.*\r?\n?', ''
+          $uwpXml = $uwpXml -replace '(?s)<ProjectReference Include="[^"]*SDL-UWP\.vcxproj">.*?</ProjectReference>', ''
+          Set-Content $uwp $uwpXml
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
-
-      - name: Setup NuGet
-        uses: nuget/setup-nuget@v2
-
-      - name: Restore NuGet packages
-        shell: pwsh
-        run: |
-          nuget restore dolphin/Source/DolphinWinRT/packages.config -PackagesDirectory dolphin/Source/packages
 
       - name: Build DolphinWinRT (Release x64 MSIX/AppX Bundle)
         shell: pwsh
