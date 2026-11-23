@@ -1,0 +1,161 @@
+diff --git a/Source/Core/Core/Config/GraphicsSettings.h b/Source/Core/Core/Config/GraphicsSettings.h
+index 33f08da..3d973ad 100644
+--- a/Source/Core/Core/Config/GraphicsSettings.h
++++ b/Source/Core/Core/Config/GraphicsSettings.h
+@@ -34,6 +34,10 @@ extern const Info<float> GFX_WIDESCREEN_HEURISTIC_ASPECT_RATIO_SLOP;
+ extern const Info<float> GFX_WIDESCREEN_HEURISTIC_STANDARD_RATIO;
+ extern const Info<float> GFX_WIDESCREEN_HEURISTIC_WIDESCREEN_RATIO;
+ extern const Info<bool> GFX_CROP;
++extern const Info<float> GFX_SCREEN_MARGIN_TOP;
++extern const Info<float> GFX_SCREEN_MARGIN_BOTTOM;
++extern const Info<float> GFX_SCREEN_MARGIN_LEFT;
++extern const Info<float> GFX_SCREEN_MARGIN_RIGHT;
+ extern const Info<int> GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES;
+ extern const Info<bool> GFX_SHOW_FPS;
+ extern const Info<bool> GFX_SHOW_FTIMES;
+diff --git a/Source/Core/Core/Config/GraphicsSettings.cpp b/Source/Core/Core/Config/GraphicsSettings.cpp
+index 5fa25a6..028ac01 100644
+--- a/Source/Core/Core/Config/GraphicsSettings.cpp
++++ b/Source/Core/Core/Config/GraphicsSettings.cpp
+@@ -32,6 +32,10 @@ const Info<float> GFX_WIDESCREEN_HEURISTIC_STANDARD_RATIO{
+ const Info<float> GFX_WIDESCREEN_HEURISTIC_WIDESCREEN_RATIO{
+     {System::GFX, "Settings", "WidescreenHeuristicWidescreenRatio"}, (16 / 9.f) / (4 / 3.f)};
+ const Info<bool> GFX_CROP{{System::GFX, "Settings", "Crop"}, false};
++const Info<float> GFX_SCREEN_MARGIN_TOP{{System::GFX, "Settings", "ScreenMarginTop"}, 0.0f};
++const Info<float> GFX_SCREEN_MARGIN_BOTTOM{{System::GFX, "Settings", "ScreenMarginBottom"}, 0.0f};
++const Info<float> GFX_SCREEN_MARGIN_LEFT{{System::GFX, "Settings", "ScreenMarginLeft"}, 0.0f};
++const Info<float> GFX_SCREEN_MARGIN_RIGHT{{System::GFX, "Settings", "ScreenMarginRight"}, 0.0f};
+ const Info<int> GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES{
+     {System::GFX, "Settings", "SafeTextureCacheColorSamples"}, 128};
+ const Info<bool> GFX_SHOW_FPS{{System::GFX, "Settings", "ShowFPS"}, false};
+diff --git a/Source/Core/VideoCommon/Present.cpp b/Source/Core/VideoCommon/Present.cpp
+index a190231..c2e5c86 100644
+--- a/Source/Core/VideoCommon/Present.cpp
++++ b/Source/Core/VideoCommon/Present.cpp
+@@ -3,7 +3,10 @@
+ 
+ #include "VideoCommon/Present.h"
+ 
++#include <algorithm>
++
+ #include "Common/ChunkFile.h"
++#include "Core/Config/GraphicsSettings.h"
+ #include "Core/HW/VideoInterface.h"
+ #include "Core/Host.h"
+ #include "Core/System.h"
+@@ -287,9 +290,17 @@ float Presenter::CalculateDrawAspectRatio(bool allow_stretch) const
+   if (!allow_stretch && aspect_mode == AspectMode::Stretch)
+     aspect_mode = AspectMode::Auto;
+ 
+-  // If stretch is enabled, we prefer the aspect ratio of the window.
++  // If stretch is enabled, we prefer the aspect ratio of the safe rendering area.
+   if (aspect_mode == AspectMode::Stretch)
+-    return (static_cast<float>(m_backbuffer_width) / static_cast<float>(m_backbuffer_height));
++  {
++    const float margin_left = std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_LEFT), 0.0f, 25.0f) / 100.0f;
++    const float margin_right = std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_RIGHT), 0.0f, 25.0f) / 100.0f;
++    const float margin_top = std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_TOP), 0.0f, 25.0f) / 100.0f;
++    const float margin_bottom = std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_BOTTOM), 0.0f, 25.0f) / 100.0f;
++    const float safe_width = std::max(1.0f, static_cast<float>(m_backbuffer_width) * (1.0f - margin_left - margin_right));
++    const float safe_height = std::max(1.0f, static_cast<float>(m_backbuffer_height) * (1.0f - margin_top - margin_bottom));
++    return safe_width / safe_height;
++  }
+ 
+   auto& vi = Core::System::GetInstance().GetVideoInterface();
+   const float aspect_ratio = vi.GetAspectRatio();
+@@ -483,9 +494,19 @@ void Presenter::UpdateDrawRectangle()
+     g_Config.fAspectRatioHackH = 1;
+   }
+ 
+-  // The rendering window size
+-  const float win_width = static_cast<float>(m_backbuffer_width);
+-  const float win_height = static_cast<float>(m_backbuffer_height);
++  // The rendering window size (inset by user screen border margins)
++  const float full_win_width = static_cast<float>(m_backbuffer_width);
++  const float full_win_height = static_cast<float>(m_backbuffer_height);
++  const float left_inset =
++      full_win_width * (std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_LEFT), 0.0f, 25.0f) / 100.0f);
++  const float right_inset =
++      full_win_width * (std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_RIGHT), 0.0f, 25.0f) / 100.0f);
++  const float top_inset =
++      full_win_height * (std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_TOP), 0.0f, 25.0f) / 100.0f);
++  const float bottom_inset =
++      full_win_height * (std::clamp(Config::Get(Config::GFX_SCREEN_MARGIN_BOTTOM), 0.0f, 25.0f) / 100.0f);
++  const float win_width = std::max(1.0f, full_win_width - left_inset - right_inset);
++  const float win_height = std::max(1.0f, full_win_height - top_inset - bottom_inset);
+   const float win_aspect_ratio = win_width / win_height;
+ 
+   // FIXME: this breaks at very low widget sizes
+@@ -539,8 +560,10 @@ void Presenter::UpdateDrawRectangle()
+     int_draw_height = std::get<1>(int_draw_res);
+   }
+ 
+-  m_target_rectangle.left = static_cast<int>(std::round(win_width / 2.0 - int_draw_width / 2.0));
+-  m_target_rectangle.top = static_cast<int>(std::round(win_height / 2.0 - int_draw_height / 2.0));
++  m_target_rectangle.left =
++      static_cast<int>(std::round(left_inset + win_width / 2.0 - int_draw_width / 2.0));
++  m_target_rectangle.top =
++      static_cast<int>(std::round(top_inset + win_height / 2.0 - int_draw_height / 2.0));
+   m_target_rectangle.right = m_target_rectangle.left + int_draw_width;
+   m_target_rectangle.bottom = m_target_rectangle.top + int_draw_height;
+ }
+diff --git a/Source/Core/UICommon/ImGuiMenu/ImGuiFrontend.cpp b/Source/Core/UICommon/ImGuiMenu/ImGuiFrontend.cpp
+index 6e633ae..0045ea5 100644
+--- a/Source/Core/UICommon/ImGuiMenu/ImGuiFrontend.cpp
++++ b/Source/Core/UICommon/ImGuiMenu/ImGuiFrontend.cpp
+@@ -23,6 +23,7 @@
+ #include <gamingdeviceinformation.h>
+ #endif
+ 
++#include <algorithm>
+ #include <unordered_map>
+ #include <wil/com.h>
+ 
+@@ -777,6 +778,47 @@ void CreateGraphicsTab(UIState* state)
+     ImGui::TreePop();
+   }
+ 
++  if (ImGui::TreeNode("Screen Borders"))
++  {
++    auto draw_margin_control = [](const char* label, const char* id,
++                                  const Config::Info<float>& setting) {
++      float value = std::clamp(Config::Get(setting), 0.0f, 25.0f);
++      ImGui::PushID(id);
++      if (ImGui::Button("-"))
++      {
++        value = std::max(0.0f, value - 0.5f);
++        Config::SetBaseOrCurrent(setting, value);
++        Config::Save();
++      }
++      ImGui::SameLine();
++      if (ImGui::Button("+"))
++      {
++        value = std::min(25.0f, value + 0.5f);
++        Config::SetBaseOrCurrent(setting, value);
++        Config::Save();
++      }
++      ImGui::SameLine();
++      ImGui::Text("%s: %.1f%%", label, value);
++      ImGui::PopID();
++    };
++
++    draw_margin_control("Top Margin", "margin_top", Config::GFX_SCREEN_MARGIN_TOP);
++    draw_margin_control("Bottom Margin", "margin_bottom", Config::GFX_SCREEN_MARGIN_BOTTOM);
++    draw_margin_control("Left Margin", "margin_left", Config::GFX_SCREEN_MARGIN_LEFT);
++    draw_margin_control("Right Margin", "margin_right", Config::GFX_SCREEN_MARGIN_RIGHT);
++
++    if (ImGui::Button("Reset Screen Borders"))
++    {
++      Config::SetBaseOrCurrent(Config::GFX_SCREEN_MARGIN_TOP, 0.0f);
++      Config::SetBaseOrCurrent(Config::GFX_SCREEN_MARGIN_BOTTOM, 0.0f);
++      Config::SetBaseOrCurrent(Config::GFX_SCREEN_MARGIN_LEFT, 0.0f);
++      Config::SetBaseOrCurrent(Config::GFX_SCREEN_MARGIN_RIGHT, 0.0f);
++      Config::Save();
++    }
++
++    ImGui::TreePop();
++  }
++
+   const char* shader_items[] = {"Synchronous", "Hybrid Ubershaders", "Exclusive Ubershaders",
+                                 "Skip Drawing"};
+   int shader_idx = 0;

@@ -1,0 +1,82 @@
+name: Build Dolphin UWP (Screen Borders)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+
+      - name: Checkout SirMangler/dolphin (UWP-pre1.18) with submodules
+        uses: actions/checkout@v4
+        with:
+          repository: SirMangler/dolphin
+          ref: UWP-pre1.18
+          path: dolphin
+          submodules: recursive
+
+      - name: Apply Screen Borders patch
+        shell: pwsh
+        run: |
+          git -C dolphin apply --ignore-space-change --ignore-whitespace "${{ github.workspace }}/screen-borders.patch"
+          git -C dolphin status --short
+
+      - name: Avoid MSVC newer-version warnings-as-errors in Base.props
+        shell: pwsh
+        run: |
+          $p = "dolphin/Source/VSProps/Base.props"
+          (Get-Content $p) -replace '<TreatWarningAsError>true</TreatWarningAsError>', '<TreatWarningAsError>false</TreatWarningAsError>' `
+                           -replace '<TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>', '<TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>' |
+            Set-Content $p
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          nuget restore dolphin/Source/DolphinWinRT/packages.config -PackagesDirectory dolphin/Source/packages
+
+      - name: Build DolphinWinRT (Release x64 MSIX/AppX Bundle)
+        shell: pwsh
+        run: |
+          $sdkDir = "C:\Program Files (x86)\Windows Kits\10\Include"
+          $sdk = if (Test-Path "$sdkDir\10.0.19041.0") { "10.0.19041.0" } else { (Get-ChildItem $sdkDir -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name }
+          Write-Host "Using WindowsTargetPlatformVersion=$sdk"
+          msbuild dolphin/Source/dolphin-emu.sln `
+            /t:DolphinWinRT `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:WindowsTargetPlatformVersion=$sdk `
+            /p:AppxBundle=Always `
+            /p:AppxBundlePlatforms=x64 `
+            /p:UapAppxPackageBuildMode=SideloadOnly `
+            /p:AppxPackageSigningEnabled=true `
+            /m
+
+      - name: Collect Xbox packages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path output | Out-Null
+          Get-ChildItem -Path dolphin -Recurse -Include *.msix,*.msixbundle,*.appx,*.appxbundle,*.cer |
+            Where-Object { $_.FullName -match 'AppPackages' } |
+            ForEach-Object {
+              Write-Host "Found package: $($_.FullName)"
+              Copy-Item $_.FullName -Destination output/
+            }
+          Get-ChildItem output
+
+      - name: Upload Dolphin UWP Xbox Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dolphin-UWP-ScreenBorders-x64
+          path: output/
